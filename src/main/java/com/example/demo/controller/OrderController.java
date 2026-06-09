@@ -1,5 +1,6 @@
 package com.example.demo.controller;
 
+import jakarta.validation.Valid;
 import com.example.demo.dto.request.CheckoutRequest;
 import com.example.demo.dto.response.ApiResponse;
 import com.example.demo.dto.response.OrderResponse;
@@ -32,7 +33,7 @@ public class OrderController {
     @PostMapping
     public ResponseEntity<ApiResponse<OrderResponse>> checkout(
             @AuthenticationPrincipal UserPrincipal userPrincipal,
-            @RequestBody CheckoutRequest checkoutRequest
+            @Valid @RequestBody CheckoutRequest checkoutRequest
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(
                 ApiResponse.<OrderResponse>builder()

@@ -1,5 +1,6 @@
 package com.example.demo.controller;
 
+import jakarta.validation.Valid;
 import com.example.demo.dto.request.ProductCreationRequest;
 import com.example.demo.dto.request.ProductSearchRequest;
 import com.example.demo.dto.request.ProductUpdateRequest;
@@ -76,7 +77,7 @@ public class ProductController {
     }
 
     @PostMapping
-    public ResponseEntity<ApiResponse<ProductResponse>> create(@RequestBody ProductCreationRequest request) {
+    public ResponseEntity<ApiResponse<ProductResponse>> create(@Valid @RequestBody ProductCreationRequest request) {
         ApiResponse<ProductResponse> response = ApiResponse.<ProductResponse>builder()
                 .status(201)
                 .message("Tao moi product thanh cong")
@@ -86,7 +87,7 @@ public class ProductController {
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<ApiResponse<ProductResponse>> update(@PathVariable Long id, @RequestBody ProductUpdateRequest request) {
+    public ResponseEntity<ApiResponse<ProductResponse>> update(@PathVariable Long id, @Valid @RequestBody ProductUpdateRequest request) {
         ApiResponse<ProductResponse> response = ApiResponse.<ProductResponse>builder()
                 .status(HttpStatus.OK.value())
                 .data(productService.update(id, request))

@@ -1,5 +1,6 @@
 package com.example.demo.controller;
 
+import jakarta.validation.Valid;
 import com.example.demo.dto.request.AddToCartRequest;
 import com.example.demo.dto.request.UpdateCartRequest;
 import com.example.demo.dto.response.ApiResponse;
@@ -22,7 +23,7 @@ public class CartController {
     @PostMapping("/add")
     public ResponseEntity<ApiResponse<Void>> addToCart(
             @AuthenticationPrincipal UserPrincipal currentUser,
-            @RequestBody AddToCartRequest request
+            @Valid @RequestBody AddToCartRequest request
             )
     {
         cartService.addToCart(currentUser.getId(), request);
@@ -50,7 +51,7 @@ public class CartController {
     @PutMapping("/item")
     public ResponseEntity<ApiResponse<Void>> updateQuantity(
             @AuthenticationPrincipal UserPrincipal currentUser,
-            @RequestBody UpdateCartRequest request
+            @Valid @RequestBody UpdateCartRequest request
     ) {
         cartService.updateQuantity(currentUser.getId(), request);
         return ResponseEntity.status(HttpStatus.OK)
