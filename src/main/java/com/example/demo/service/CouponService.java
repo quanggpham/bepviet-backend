@@ -23,6 +23,7 @@ import com.example.demo.repository.CouponRepository;
 import com.example.demo.repository.CouponUsageRepository;
 import com.example.demo.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -55,8 +56,9 @@ public class CouponService {
         Coupon coupon = couponRepository.findByCode(code)
                 .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy mã giảm giá"));
 
-        coupon.setUsedCount(coupon.getUsedCount() + 1);
-        couponRepository.save(coupon);
+        if (couponRepository.incrementUsage(coupon.getId()) == 0) {
+            throw new BusinessException("Mã giảm giá đã hết");
+        }
 
         CouponUsage couponUsage = CouponUsage.builder()
                 .coupon(coupon)
@@ -64,7 +66,12 @@ public class CouponService {
                 .order(order)
                 .discountAmount(appliedDiscount)
                 .build();
-        couponUsageRepository.save(couponUsage);
+        try {
+            couponUsageRepository.saveAndFlush(couponUsage);
+        } catch (DataIntegrityViolationException ex) {
+            // unique (coupon_id, user_id): a concurrent order by the same user already redeemed it
+            throw new BusinessException("Bạn đã sử dụng mã giảm giá này rồi");
+        }
     }
 
     @Transactional

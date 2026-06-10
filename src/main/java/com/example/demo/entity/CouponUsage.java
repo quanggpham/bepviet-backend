@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Table(name = "coupon_usages")
+@Table(name = "coupon_usages",
+        uniqueConstraints = @UniqueConstraint(name = "uk_coupon_usage_coupon_user", columnNames = {"coupon_id", "user_id"}))
 public class CouponUsage {
 
     @Id

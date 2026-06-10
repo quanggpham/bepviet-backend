@@ -24,7 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 @Service
 @RequiredArgsConstructor
@@ -57,16 +60,16 @@ public class OrderService {
 
         BigDecimal subTotal = BigDecimal.ZERO;
         List<CartItemRequest> pricingItems = new ArrayList<>();
+        Map<Long, Integer> quantityByProductId = new TreeMap<>();
+        Map<Long, Product> productsById = new HashMap<>();
 
         for (CartItemRequest item : request.getItems())
         {
             Product product = productRepository.findById(item.getProductId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product", "", item.getProductId()));
-            if (product.getStockQuantity() < item.getQuantity()) {
-                throw new BusinessException("Sản phẩm " + product.getName() + " không đủ số lượng tồn kho");
-            }
 
-            product.setStockQuantity(product.getStockQuantity() - item.getQuantity());
+            quantityByProductId.merge(product.getId(), item.getQuantity(), Integer::sum);
+            productsById.put(product.getId(), product);
             subTotal = subTotal.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
             pricingItems.add(item);
 
@@ -79,6 +82,13 @@ public class OrderService {
 
             order.addOrderDetail(orderDetail);
         }
+
+        // TreeMap iterates by ascending product id, so concurrent multi-item orders lock rows in the same order.
+        quantityByProductId.forEach((productId, quantity) -> {
+            if (productRepository.decreaseStock(productId, quantity) == 0) {
+                throw new BusinessException("Sản phẩm " + productsById.get(productId).getName() + " không đủ số lượng tồn kho");
+            }
+        });
 
         order.setSubTotal(subTotal);
 
@@ -160,12 +170,12 @@ public class OrderService {
             throw new BusinessException("Chỉ đơn hàng đang chờ xác nhận mới có thể hủy");
         }
         order.setStatus(OrderStatus.CANCELLED);
-        List<OrderDetail> orderDetails = order.getOrderDetails();
 
-        for (OrderDetail item : orderDetails) {
-            Product product = item.getProduct();
-            product.setStockQuantity(product.getStockQuantity() + item.getQuantity());
+        Map<Long, Integer> quantityByProductId = new TreeMap<>();
+        for (OrderDetail item : order.getOrderDetails()) {
+            quantityByProductId.merge(item.getProduct().getId(), item.getQuantity(), Integer::sum);
         }
+        quantityByProductId.forEach(productRepository::increaseStock);
 
         orderRepository.save(order);
     }
