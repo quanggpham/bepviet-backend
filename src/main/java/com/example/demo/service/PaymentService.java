@@ -12,6 +12,7 @@ import com.example.demo.exception.AccessDeniedException;
 import com.example.demo.exception.ResourceNotFoundException;
 import com.example.demo.repository.OrderRepository;
 import com.example.demo.repository.PaymentRepository;
+import com.example.demo.repository.ProcessedWebhookEventRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stripe.Stripe;
@@ -31,6 +32,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -43,6 +45,7 @@ public class PaymentService {
 
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
+    private final ProcessedWebhookEventRepository processedWebhookEventRepository;
     private final EmailService emailService;
     private final ObjectMapper objectMapper;
 
@@ -258,8 +261,9 @@ public class PaymentService {
     public void handleStripeWebhook(String payload, String stripeSignature) {
         ensureStripeWebhookConfigured();
 
+        Event event;
         try {
-            Webhook.constructEvent(payload, stripeSignature, stripeWebhookSecret);
+            event = Webhook.constructEvent(payload, stripeSignature, stripeWebhookSecret);
         } catch (SignatureVerificationException ex) {
             throw new BusinessException("Stripe webhook signature không hợp lệ");
         } catch (Exception ex) {
@@ -269,7 +273,14 @@ public class PaymentService {
         JsonNode root = parseWebhookPayload(payload);
         String eventType = readText(root, "type");
 
-        log.info("Nhan Stripe webhook event: {}", eventType);
+        log.info("Nhan Stripe webhook event: id={}, type={}", event.getId(), eventType);
+
+        // Stripe delivers at-least-once. Recording the event id in the same transaction means a
+        // redelivery is acknowledged without side effects, and a failed attempt can be retried.
+        if (processedWebhookEventRepository.insertIfAbsent(event.getId(), "STRIPE", eventType) == 0) {
+            log.info("Bo qua Stripe event da xu ly: {}", event.getId());
+            return;
+        }
 
         switch (eventType) {
             case "checkout.session.completed" -> handleCheckoutSessionCompleted(root, payload);
@@ -290,10 +301,13 @@ public class PaymentService {
             log.warn("Thieu sessionId/orderId trong checkout.session.completed");
             return;
         }
+        if (!"paid".equals(readText(sessionNode, "payment_status"))) {
+            log.info("Checkout session {} chua thanh toan (payment_status={}), bo qua",
+                    sessionId, readText(sessionNode, "payment_status"));
+            return;
+        }
 
-        Payment payment = paymentRepository.findByTransactionReference(sessionId)
-                .orElseGet(() -> createStripePayment(orderIdValue, sessionId, payload));
-        markStripePaymentCompleted(payment, payload);
+        confirmStripePayment(Long.valueOf(orderIdValue), sessionId, sessionNode.path("amount_total").asLong(-1), payload);
     }
 
     private void handlePaymentIntentSucceeded(JsonNode root, String payload) {
@@ -314,7 +328,8 @@ public class PaymentService {
             log.warn("Khong tim thay payment STRIPE cho orderId={} khi xu ly payment_intent.succeeded", orderId);
             return;
         }
-        markStripePaymentCompleted(payment, payload);
+        confirmStripePayment(orderId, payment.getTransactionReference(),
+                paymentIntentNode.path("amount_received").asLong(-1), payload);
     }
 
     private void handlePaymentIntentFailed(JsonNode root, String payload) {
@@ -341,38 +356,52 @@ public class PaymentService {
         paymentRepository.save(payment);
     }
 
-    private Payment createStripePayment(String orderIdValue, String sessionId, String payload) {
-        Long orderId = Long.valueOf(orderIdValue);
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy đơn hàng"));
+    /**
+     * Moves a PENDING Stripe order to CONFIRMED exactly once. The order row is locked so that
+     * different events for the same order (checkout.session.completed, payment_intent.succeeded)
+     * are applied one after another and only the first one makes the transition.
+     */
+    private void confirmStripePayment(Long orderId, String sessionId, long paidAmount, String payload) {
+        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
+        if (order == null) {
+            log.warn("Stripe bao thanh toan cho orderId={} khong ton tai", orderId);
+            return;
+        }
+        if (order.getPaymentMethod() != PaymentMethod.STRIPE) {
+            log.warn("Bo qua Stripe payment: orderId={} dung phuong thuc {}", orderId, order.getPaymentMethod());
+            return;
+        }
+        if (order.getStatus() == OrderStatus.CONFIRMED) {
+            log.info("Order {} da CONFIRMED, bo qua event trung", orderId);
+            return;
+        }
+        if (order.getStatus() != OrderStatus.PENDING) {
+            log.warn("Stripe da thu tien cho orderId={} o trang thai {}: can hoan tien thu cong", orderId, order.getStatus());
+            return;
+        }
+        long expectedAmount = toStripeAmount(order.getTotalMoney());
+        if (paidAmount != expectedAmount) {
+            log.warn("So tien Stripe khong khop orderId={}: expected={}, paid={}", orderId, expectedAmount, paidAmount);
+            return;
+        }
 
-        return Payment.builder()
-                .order(order)
-                .paymentMethod(PaymentMethod.STRIPE)
-                .amount(order.getTotalMoney())
-                .transactionReference(sessionId)
-                .status(PaymentStatus.PENDING)
-                .gatewayResponseJson(payload)
-                .build();
-    }
-
-    private void markStripePaymentCompleted(Payment payment, String payload) {
-        boolean shouldSendEmail = payment.getStatus() != PaymentStatus.COMPLETED
-                || payment.getOrder().getStatus() != OrderStatus.CONFIRMED;
-
+        Payment payment = (sessionId == null ? Optional.<Payment>empty() : paymentRepository.findByTransactionReference(sessionId))
+                .orElseGet(() -> Payment.builder()
+                        .order(order)
+                        .paymentMethod(PaymentMethod.STRIPE)
+                        .amount(order.getTotalMoney())
+                        .transactionReference(sessionId)
+                        .build());
         payment.setStatus(PaymentStatus.COMPLETED);
         payment.setGatewayResponseJson(payload);
         paymentRepository.save(payment);
 
-        Order order = payment.getOrder();
         order.setStatus(OrderStatus.CONFIRMED);
         orderRepository.save(order);
 
-        if (shouldSendEmail) {
-            Order emailReadyOrder = orderRepository.findByIdWithEmailDetails(order.getId())
-                    .orElse(order);
-            emailService.sendOrderConfirmationEmail(emailReadyOrder);
-        }
+        Order emailReadyOrder = orderRepository.findByIdWithEmailDetails(order.getId())
+                .orElse(order);
+        emailService.sendOrderConfirmationEmail(emailReadyOrder);
     }
 
     private Long toStripeAmount(BigDecimal amount) {
