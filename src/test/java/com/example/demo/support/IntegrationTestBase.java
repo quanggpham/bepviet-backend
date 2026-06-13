@@ -17,7 +17,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.math.BigDecimal;
 import java.util.UUID;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Boots the full application against a throwaway PostgreSQL container.
@@ -41,6 +41,9 @@ import java.util.concurrent.ThreadLocalRandom;
 public abstract class IntegrationTestBase {
 
     public static final String STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
+
+    /** users.phone is unique and all test classes share one database, so random numbers eventually collide. */
+    private static final AtomicInteger PHONE_SEQUENCE = new AtomicInteger();
 
     @ServiceConnection
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
@@ -79,11 +82,15 @@ public abstract class IntegrationTestBase {
         User user = User.builder()
                 .fullName("Test " + role)
                 .email(role.name().toLowerCase() + "-" + suffix + "@test.vn")
-                .phone(String.format("09%08d", ThreadLocalRandom.current().nextInt(100_000_000)))
+                .phone(uniquePhone())
                 .password("{noop}unused")
                 .role(role)
                 .build();
         return userRepository.save(user);
+    }
+
+    protected static String uniquePhone() {
+        return String.format("09%08d", PHONE_SEQUENCE.incrementAndGet());
     }
 
     protected String tokenFor(User user) {
