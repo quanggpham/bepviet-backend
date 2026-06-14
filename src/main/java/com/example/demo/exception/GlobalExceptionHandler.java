@@ -1,9 +1,13 @@
 package com.example.demo.exception;
 
 import com.example.demo.dto.response.ApiResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
@@ -12,6 +16,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException; // Đảm bảo import đúng AccessDeniedException của Security
 import java.util.HashMap;
 import java.util.Map;
@@ -20,6 +26,12 @@ import java.util.Map;
 public class GlobalExceptionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    private final ObjectMapper objectMapper;
+
+    public GlobalExceptionHandler(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
 
     private String getPath(WebRequest request) {
@@ -66,6 +78,30 @@ public class GlobalExceptionHandler {
                 .build();
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+
+    /**
+     * Written directly to the response so a 429 still reaches clients that only accept
+     * text/event-stream (the streaming chat endpoint), which content negotiation would refuse.
+     */
+    @ExceptionHandler(TooManyRequestsException.class)
+    public void handleTooManyRequests(TooManyRequestsException ex, WebRequest request, HttpServletResponse response) throws IOException {
+        logger.warn("TooManyRequests: Path= {} | Message= {}", getPath(request), ex.getMessage());
+
+        ApiResponse<Void> body = ApiResponse.<Void>builder()
+                .status(HttpStatus.TOO_MANY_REQUESTS.value())
+                .message(ex.getMessage())
+                .path(getPath(request))
+                .build();
+
+        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+        if (ex.getRetryAfterSeconds() != null) {
+            response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        objectMapper.writeValue(response.getWriter(), body);
     }
 
 

@@ -9,12 +9,15 @@ import com.example.demo.dto.response.AuthenticationResponse;
 import com.example.demo.entity.PasswordResetToken;
 import com.example.demo.entity.User;
 import com.example.demo.enums.Role;
+import com.example.demo.exception.BaseException;
 import com.example.demo.exception.BusinessException;
+import com.example.demo.exception.TooManyRequestsException;
 import com.example.demo.repository.PasswordResetTokenRepository;
 import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
 import com.example.demo.security.UserPrincipal;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -22,11 +25,18 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthenticationService {
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final int MAX_RESET_ATTEMPTS = 5;
+
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
@@ -85,11 +95,12 @@ public class AuthenticationService {
     public void forgotPassword(ForgotPasswordRequest request) {
         String email = request.getEmail();
         if (!userRepository.existsByEmail(email)) {
-            throw new BusinessException("Email không tồn tại trong hệ thống");
+            // Same response as for a real account, so the endpoint cannot be used to probe for e-mails.
+            log.info("Forgot-password requested for unknown email");
+            return;
         }
 
-        // Generate 6-digit verification code
-        String code = String.valueOf((int) (Math.random() * 900000) + 100000);
+        String code = String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
 
         // Delete old token if exists, or fetch it
         PasswordResetToken token = passwordResetTokenRepository.findByEmail(email)
@@ -98,6 +109,7 @@ public class AuthenticationService {
         token.setEmail(email);
         token.setToken(code);
         token.setExpiryDate(LocalDateTime.now().plusMinutes(5));
+        token.setFailedAttempts(0);
 
         passwordResetTokenRepository.save(token);
 
@@ -105,16 +117,28 @@ public class AuthenticationService {
         emailService.sendPasswordResetEmail(email, code);
     }
 
-    @Transactional
+    /**
+     * Rejected attempts must stay counted, hence no rollback for business exceptions.
+     */
+    @Transactional(noRollbackFor = BaseException.class)
     public void resetPassword(ResetPasswordRequest request) {
         String email = request.getEmail();
         String code = request.getCode();
 
-        PasswordResetToken token = passwordResetTokenRepository.findByEmailAndToken(email, code)
+        PasswordResetToken token = passwordResetTokenRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException("Mã xác thực không chính xác hoặc không hợp lệ"));
 
         if (token.getExpiryDate().isBefore(LocalDateTime.now())) {
             throw new BusinessException("Mã xác thực đã hết hạn");
+        }
+
+        if (passwordResetTokenRepository.consumeAttempt(email, MAX_RESET_ATTEMPTS) == 0) {
+            throw new TooManyRequestsException("Bạn đã nhập sai mã quá nhiều lần, vui lòng yêu cầu mã mới", null);
+        }
+
+        if (code == null || !MessageDigest.isEqual(
+                token.getToken().getBytes(StandardCharsets.UTF_8), code.getBytes(StandardCharsets.UTF_8))) {
+            throw new BusinessException("Mã xác thực không chính xác hoặc không hợp lệ");
         }
 
         User user = userRepository.findByEmail(email)
