@@ -155,7 +155,10 @@ All threads are released at the same instant with a `CountDownLatch`.
 | Coupon with usage limit 5, 50 buyers | redeemed **42–46** times, `used_count` = 5 | redeemed 5 times, `used_count` = 5 |
 | Same user, same coupon, 10 parallel checkouts | redeemed 10 times | redeemed once |
 | 10 cancellations + 20 new orders at once (expected stock 30) | final stock 35–40 | 30 |
-| 50 two-item orders in opposite order `[A,B]` / `[B,A]` | — (test added after the fix) | 50/50 succeeded, no deadlock |
+| 50 two-item orders in opposite order `[A,B]` / `[B,A]` | only 6–16 of 50 succeeded; PostgreSQL logged `deadlock detected` 351 times over 10 runs* | 50/50 succeeded, no deadlock |
+
+\* This test was written after the fix; its "before" was measured later by running it against the original
+code with the reproduction steps below.
 
 Fix: stock and coupon usage are changed by a single conditional `UPDATE … WHERE stock >= :qty`
 (`… used_count < usage_limit`); the affected-row count decides success. Rows are updated in ascending
@@ -180,6 +183,29 @@ Payloads are signed with the webhook secret exactly as Stripe signs them.
 Fix: every event id is recorded with `INSERT … ON CONFLICT DO NOTHING` inside the handling transaction,
 and the order row is locked (`SELECT … FOR UPDATE`) while the `PENDING → CONFIRMED` transition is checked.
 
+### 4. Rate limiting — `RateLimitingTest`
+
+Each test uses its own client IP and e-mail. "Before" is one run on the unfixed code (10 repetitions for the
+parallel test); "after" is 3 full-suite runs (30 repetitions for the parallel test).
+
+| Scenario | Before | After |
+|---|---|---|
+| 6 wrong passwords, then the correct one (same IP + e-mail) | `401 ×6`, then `200` | `401 ×5`, `429`, then `429` with `Retry-After` |
+| 6 wrong passwords from another IP, then the real user logs in | `200` | `200` (no lockout of the real user) |
+| Forgot-password for an unknown vs. a known e-mail | `400` vs `200` (reveals accounts) | `200` vs `200` |
+| 4 forgot-password requests for one e-mail | `200 ×4` | `200 ×3`, `429` |
+| 5 wrong reset codes, then the real code | real code accepted (`200`) | refused (`429`) |
+| 50 parallel wrong reset codes, then the real code | 10/10 runs: all 50 evaluated, real code accepted | 30/30 runs: exactly 5 evaluated, 45 refused, real code refused |
+| 12 chat requests from one IP within a minute | `200 ×12` | `200 ×10`, `429 ×2` |
+| `/chat/stream` after 10 chat requests (`Accept: text/event-stream`) | `200` | `429` |
+| 40 chat requests from different IPs, daily budget 30 | 40 answered | 30 answered, 10 refused |
+| Chat message of 2,000 characters | `200` | `400` |
+
+Fix: an in-memory sliding-window limiter (no new dependency) with limits configurable under
+`app.rate-limit.*`. Login failures are keyed by IP + e-mail plus a per-IP cap; each reset code allows five
+verification attempts, counted with a conditional `UPDATE` so parallel guesses cannot exceed it, and codes
+come from `SecureRandom`. Limits are per instance; behind a reverse proxy set `RATE_LIMIT_TRUSTED_PROXIES`.
+
 ### Re-running the tests
 
 Docker must be running (Testcontainers starts PostgreSQL automatically; no local database or API keys needed).
@@ -189,15 +215,22 @@ Docker must be running (Testcontainers starts PostgreSQL automatically; no local
 ./mvnw test -Dtest=SecurityHardeningTest
 ./mvnw test -Dtest=OrderConcurrencyTest       # prints one [CONCURRENCY] line per repetition
 ./mvnw test -Dtest=StripeWebhookTest          # prints one [WEBHOOK] line per concurrent repetition
+./mvnw test -Dtest=RateLimitingTest           # prints [RATELIMIT] lines
 ```
 
-To reproduce a "before" number, restore only the production code from before that fix, run its test, then restore:
+To reproduce a "before" number, check out the fix commit in a separate worktree (so only the tests that
+existed at that point are compiled), restore the production code from its parent, and run the test:
 
 ```bash
-git checkout <fix-commit>^ -- src/main        # e.g. the "fix(orders): ..." commit
+git worktree add ../bepviet-before <fix-commit>      # e.g. the "fix(orders): ..." commit
+cd ../bepviet-before
+git checkout <fix-commit>^ -- src/main
 ./mvnw test -Dtest=OrderConcurrencyTest
-git checkout HEAD -- src/main
+cd - && git worktree remove --force ../bepviet-before
 ```
+
+This works for sections 1–3. `RateLimitingTest` resets the new `RateLimiter` between tests, so it does not
+compile against the pre-fix code; its "before" column was recorded before that reset hook was added.
 
 For local development, `docker compose up -d` starts PostgreSQL on port `5433`.
 
