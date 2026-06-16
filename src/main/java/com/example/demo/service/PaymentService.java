@@ -32,6 +32,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -42,6 +45,9 @@ import java.util.regex.Pattern;
 public class PaymentService {
 
     private static final Pattern SEPAY_ORDER_CODE_PATTERN = Pattern.compile("(?i)DH(\\d{1,10})");
+    /** Stripe requires a Checkout Session to live at least 30 minutes. */
+    private static final Duration STRIPE_SESSION_LIFETIME = Duration.ofMinutes(31);
+    private static final Duration WEBHOOK_GRACE = Duration.ofMinutes(4);
 
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
@@ -84,6 +90,9 @@ public class PaymentService {
 
     @Value("${stripe.cancel-url}")
     private String stripeCancelUrl;
+
+    @Value("${app.order-expiry.ttl-minutes:60}")
+    private long orderTtlMinutes;
 
     public SepayCheckoutResponse preparePayment(Long orderId, Long userId) throws Exception {
         Order order = findOwnedOrder(orderId, userId);
@@ -130,9 +139,11 @@ public class PaymentService {
             return;
         }
 
+        // SePay retries until it gets a 2xx. Recording the transfer id in this transaction makes a
+        // redelivery a no-op, while a failed attempt rolls back and can be retried.
         String transactionReference = readSePayTransactionReference(root);
         if (transactionReference != null
-                && paymentRepository.findByTransactionReference(transactionReference).isPresent()) {
+                && processedWebhookEventRepository.insertIfAbsent(transactionReference, "SEPAY", "transfer.in") == 0) {
             log.info("Bo qua SePay webhook trung giao dich: {}", transactionReference);
             return;
         }
@@ -145,10 +156,15 @@ public class PaymentService {
         Long orderId = extractOrderIdFromSePayCode(paymentCodeSource);
         BigDecimal transferAmount = readAmount(root, "transferAmount");
 
-        Order order = orderRepository.findById(orderId)
+        Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Không tìm thấy đơn hàng"));
         if (order.getPaymentMethod() != PaymentMethod.SEPAY && order.getPaymentMethod() != PaymentMethod.BANK_TRANSFER) {
             throw new BusinessException("Đơn hàng không sử dụng phương thức thanh toán SePay");
+        }
+        if (order.getStatus() != OrderStatus.PENDING) {
+            log.warn("SePay nhan tien cho orderId={} o trang thai {} (reference={}): can doi soat/hoan tien thu cong",
+                    orderId, order.getStatus(), transactionReference);
+            return;
         }
         if (transferAmount.compareTo(order.getTotalMoney().setScale(0, RoundingMode.HALF_UP)) != 0) {
             throw new BusinessException("Số tiền chuyển khoản không khớp đơn hàng");
@@ -162,9 +178,6 @@ public class PaymentService {
                         .status(PaymentStatus.PENDING)
                         .build());
 
-        boolean shouldSendEmail = payment.getStatus() != PaymentStatus.COMPLETED
-                || order.getStatus() != OrderStatus.CONFIRMED;
-
         payment.setTransactionReference(transactionReference);
         payment.setAmount(transferAmount);
         payment.setStatus(PaymentStatus.COMPLETED);
@@ -175,11 +188,9 @@ public class PaymentService {
         order.setStatus(OrderStatus.CONFIRMED);
         orderRepository.save(order);
 
-        if (shouldSendEmail) {
-            Order emailReadyOrder = orderRepository.findByIdWithEmailDetails(order.getId())
-                    .orElse(order);
-            emailService.sendOrderConfirmationEmail(emailReadyOrder);
-        }
+        Order emailReadyOrder = orderRepository.findByIdWithEmailDetails(order.getId())
+                .orElse(order);
+        emailService.sendOrderConfirmationEmail(emailReadyOrder);
 
         log.info("Da xu ly SePay webhook thanh cong: orderId={}, amount={}, reference={}",
                 orderId, transferAmount, transactionReference);
@@ -193,6 +204,15 @@ public class PaymentService {
 
         if (order.getPaymentMethod() != PaymentMethod.STRIPE) {
             throw new BusinessException("Đơn hàng này không sử dụng phương thức thanh toán Stripe");
+        }
+        if (order.getStatus() != OrderStatus.PENDING) {
+            throw new BusinessException("Đơn hàng không còn ở trạng thái chờ thanh toán");
+        }
+        // The session must expire before the unpaid-order job may cancel the order,
+        // otherwise a customer could pay for an order whose stock was already released.
+        LocalDateTime orderExpiresAt = order.getCreatedAt().plusMinutes(orderTtlMinutes);
+        if (LocalDateTime.now().plus(STRIPE_SESSION_LIFETIME).plus(WEBHOOK_GRACE).isAfter(orderExpiresAt)) {
+            throw new BusinessException("Đơn hàng sắp hết hạn thanh toán, vui lòng đặt lại đơn mới");
         }
 
         Payment existingPayment = paymentRepository.findByOrderIdAndPaymentMethod(orderId, PaymentMethod.STRIPE)
@@ -209,6 +229,7 @@ public class PaymentService {
                 .setSuccessUrl(stripeSuccessUrl)
                 .setCancelUrl(stripeCancelUrl)
                 .setClientReferenceId(String.valueOf(order.getId()))
+                .setExpiresAt(Instant.now().plus(STRIPE_SESSION_LIFETIME).getEpochSecond())
                 .putMetadata("orderId", String.valueOf(order.getId()))
                 .putMetadata("paymentMethod", PaymentMethod.STRIPE.name())
                 .setPaymentIntentData(

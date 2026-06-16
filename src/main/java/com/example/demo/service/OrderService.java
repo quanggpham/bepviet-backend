@@ -4,6 +4,7 @@ import com.example.demo.dto.request.CartItemRequest;
 import com.example.demo.dto.request.CheckoutRequest;
 import com.example.demo.dto.response.OrderResponse;
 import com.example.demo.dto.response.PageResponse;
+import com.example.demo.entity.CouponUsage;
 import com.example.demo.entity.Order;
 import com.example.demo.entity.OrderDetail;
 import com.example.demo.entity.Product;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -39,6 +41,8 @@ public class OrderService {
     private final CartItemRepository cartItemRepository;
     private final CouponService couponService;
     private final EmailService emailService;
+    private final CouponRepository couponRepository;
+    private final CouponUsageRepository couponUsageRepository;
 
     @Transactional
     public OrderResponse createOrder(Long userId, CheckoutRequest request) {
@@ -159,7 +163,8 @@ public class OrderService {
 
     @Transactional
     public void cancelOrder(Long orderId, Long userId) {
-        Order order = orderRepository.findById(orderId)
+        // Row lock: concurrent cancels, the expiry job and payment webhooks see each other's status change.
+        Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Đơn hàng không tồn tại"));
 
         if (!order.getUser().getId().equals(userId)) {
@@ -169,6 +174,28 @@ public class OrderService {
         if (!order.getStatus().equals(OrderStatus.PENDING)) {
             throw new BusinessException("Chỉ đơn hàng đang chờ xác nhận mới có thể hủy");
         }
+        cancelAndRelease(order);
+    }
+
+    /**
+     * Cancels an unpaid Stripe order created before {@code createdBefore}. Returns false when the order
+     * was paid, cancelled or otherwise changed in the meantime; the row lock makes this safe against webhooks.
+     */
+    @Transactional
+    public boolean expireUnpaidOrder(Long orderId, LocalDateTime createdBefore) {
+        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
+        if (order == null
+                || order.getStatus() != OrderStatus.PENDING
+                || order.getPaymentMethod() != PaymentMethod.STRIPE
+                || !order.getCreatedAt().isBefore(createdBefore)) {
+            return false;
+        }
+        cancelAndRelease(order);
+        return true;
+    }
+
+    /** Caller must hold the order row lock and have checked that the order is PENDING. */
+    private void cancelAndRelease(Order order) {
         order.setStatus(OrderStatus.CANCELLED);
 
         Map<Long, Integer> quantityByProductId = new TreeMap<>();
@@ -176,6 +203,11 @@ public class OrderService {
             quantityByProductId.merge(item.getProduct().getId(), item.getQuantity(), Integer::sum);
         }
         quantityByProductId.forEach(productRepository::increaseStock);
+
+        for (CouponUsage usage : couponUsageRepository.findByOrderId(order.getId())) {
+            couponRepository.releaseUsage(usage.getCoupon().getId());
+            couponUsageRepository.delete(usage);
+        }
 
         orderRepository.save(order);
     }

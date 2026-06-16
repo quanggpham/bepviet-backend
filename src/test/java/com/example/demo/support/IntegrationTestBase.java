@@ -15,7 +15,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.testcontainers.containers.PostgreSQLContainer;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -31,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
         "spring.ai.google.genai.chat.api-key=test", "spring.ai.vectorstore.pinecone.api-key=test",
         "stripe.secret-key=sk_test_dummy", "stripe.publishable-key=pk_test_dummy",
         "stripe.webhook-secret=" + IntegrationTestBase.STRIPE_WEBHOOK_SECRET,
+        "sepay.webhook-api-key=" + IntegrationTestBase.SEPAY_WEBHOOK_API_KEY,
         "spring.mail.host=localhost", "spring.mail.port=1",
         "app.cart-reminder.enabled=false",
         "spring.jpa.show-sql=false",
@@ -41,6 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public abstract class IntegrationTestBase {
 
     public static final String STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
+    public static final String SEPAY_WEBHOOK_API_KEY = "sepay_test_key";
 
     /** users.phone is unique and all test classes share one database, so random numbers eventually collide. */
     private static final AtomicInteger PHONE_SEQUENCE = new AtomicInteger();
@@ -87,6 +93,20 @@ public abstract class IntegrationTestBase {
                 .role(role)
                 .build();
         return userRepository.save(user);
+    }
+
+    /** Builds a Stripe-Signature header for the payload, exactly as Stripe signs webhooks. */
+    protected static String stripeSignature(String payload) {
+        try {
+            long timestamp = System.currentTimeMillis() / 1000;
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(STRIPE_WEBHOOK_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            String signature = HexFormat.of().formatHex(
+                    mac.doFinal((timestamp + "." + payload).getBytes(StandardCharsets.UTF_8)));
+            return "t=" + timestamp + ",v1=" + signature;
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     protected static String uniquePhone() {

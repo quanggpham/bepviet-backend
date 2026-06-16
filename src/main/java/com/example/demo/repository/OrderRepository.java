@@ -33,6 +33,11 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o FROM Order o WHERE o.id = :orderId")
     java.util.Optional<Order> findByIdForUpdate(@Param("orderId") Long orderId);
 
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.paymentMethod = :paymentMethod AND o.createdAt < :createdBefore")
+    List<Long> findIdsByStatusAndPaymentMethodCreatedBefore(@Param("status") OrderStatus status,
+                                                            @Param("paymentMethod") com.example.demo.enums.PaymentMethod paymentMethod,
+                                                            @Param("createdBefore") LocalDateTime createdBefore);
+
     boolean existsByUserIdAndCreatedAtAfter(Long userId, LocalDateTime createdAt);
 
     @Query("SELECT new com.example.demo.dto.response.OverviewStatisticResponse(" +
