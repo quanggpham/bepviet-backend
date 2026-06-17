@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -78,13 +79,16 @@ public class ProductLikeService {
 
     @Transactional(readOnly = true)
     public List<ProductResponse> getLikedProducts(Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Khong tim thay nguoi dung"));
-        List<ProductLike> likes = productLikeRepository.findByUserOrderByCreatedAtDesc(user);
+        if (!userRepository.existsById(userId)) {
+            throw new ResourceNotFoundException("Khong tim thay nguoi dung");
+        }
+        List<ProductLike> likes = productLikeRepository.findByUserIdWithProduct(userId);
+        Map<Long, Long> likeCounts = productLikeRepository.countByProductIds(
+                likes.stream().map(pl -> pl.getProduct().getId()).toList());
         return likes.stream()
                 .map(pl -> {
                     ProductResponse response = productMapper.toResponse(pl.getProduct());
-                    response.setLikeCount(productLikeRepository.countByProductId(pl.getProduct().getId()));
+                    response.setLikeCount(likeCounts.getOrDefault(pl.getProduct().getId(), 0L));
                     response.setLiked(true);
                     return response;
                 })
