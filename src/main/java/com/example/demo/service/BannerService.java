@@ -1,5 +1,6 @@
 package com.example.demo.service;
 
+import com.example.demo.config.CacheConfig;
 import com.example.demo.dto.request.BannerReorderRequest;
 import com.example.demo.dto.request.BannerRequest;
 import com.example.demo.dto.response.BannerResponse;
@@ -11,6 +12,8 @@ import com.example.demo.exception.ResourceNotFoundException;
 import com.example.demo.mapper.BannerMapper;
 import com.example.demo.repository.BannerRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -31,6 +34,7 @@ public class BannerService {
     private final BannerMapper bannerMapper;
 
     @Transactional(readOnly = true)
+    @Cacheable(CacheConfig.ACTIVE_BANNERS)
     public List<BannerResponse> getActiveBanners() {
         return bannerRepository.findActiveBanners(LocalDateTime.now())
                 .stream()
@@ -63,6 +67,7 @@ public class BannerService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.ACTIVE_BANNERS, allEntries = true)
     public BannerResponse createBanner(BannerRequest request) {
         validateBannerSchedule(request);
 
@@ -73,6 +78,7 @@ public class BannerService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.ACTIVE_BANNERS, allEntries = true)
     public BannerResponse updateBanner(Long id, BannerRequest request) {
         validateBannerSchedule(request);
 
@@ -84,12 +90,14 @@ public class BannerService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.ACTIVE_BANNERS, allEntries = true)
     public void deleteBanner(Long id) {
         Banner banner = findBanner(id);
         bannerRepository.delete(banner);
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.ACTIVE_BANNERS, allEntries = true)
     public void changeBannerStatus(Long id, boolean active) {
         Banner banner = findBanner(id);
         banner.setActive(active);
@@ -97,6 +105,7 @@ public class BannerService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.ACTIVE_BANNERS, allEntries = true)
     public List<BannerResponse> reorderBanners(List<BannerReorderRequest> requests) {
         if (requests == null || requests.isEmpty()) {
             throw new BaseException("Danh sách sắp xếp banner không được để trống");

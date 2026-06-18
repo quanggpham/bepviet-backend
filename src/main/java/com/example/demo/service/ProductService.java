@@ -1,5 +1,6 @@
 package com.example.demo.service;
 
+import com.example.demo.config.CacheConfig;
 import com.example.demo.dto.request.ProductCreationRequest;
 import com.example.demo.dto.request.ProductSearchRequest;
 import com.example.demo.dto.request.ProductUpdateRequest;
@@ -15,6 +16,8 @@ import com.example.demo.repository.ProductRepository;
 import com.example.demo.repository.specification.ProductSpecification;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -42,6 +45,7 @@ public class ProductService {
     private final ProductStatsRepository productStatsRepository;
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.PUBLIC_PRODUCTS, allEntries = true)
     public ProductResponse create(@Valid ProductCreationRequest request) {
         Product product = productMapper.toEntity(request);
 
@@ -53,6 +57,7 @@ public class ProductService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.PUBLIC_PRODUCTS, allEntries = true)
     public ProductResponse update(Long id, ProductUpdateRequest request) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
@@ -64,6 +69,7 @@ public class ProductService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.PUBLIC_PRODUCTS, allEntries = true)
     public ProductResponse delete(Long id) {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
@@ -77,6 +83,10 @@ public class ProductService {
         return toResponses(List.of(product), userId).get(0);
     }
 
+    /** Only anonymous lists are cached: a signed-in viewer's list carries their own "liked" flags. */
+    @Cacheable(cacheNames = CacheConfig.PUBLIC_PRODUCTS, condition = "#userId == null",
+            key = "T(java.util.Arrays).asList(#request.categoryId, #request.name, #request.minPrice, #request.maxPrice, "
+                    + "#pageable.pageNumber, #pageable.pageSize, #pageable.sort.toString())")
     public PageResponse<ProductResponse> search(ProductSearchRequest request, Pageable pageable, Long userId) {
         int validatedSize = Math.min(pageable.getPageSize(), 50);
 

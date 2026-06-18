@@ -1,5 +1,6 @@
 package com.example.demo.service;
 
+import com.example.demo.config.CacheConfig;
 import com.example.demo.dto.request.CategoryCreationRequest;
 import com.example.demo.dto.request.CategoryUpdateRequest;
 import com.example.demo.dto.response.CategoryResponse;
@@ -8,6 +9,8 @@ import com.example.demo.exception.BusinessException;
 import com.example.demo.exception.ResourceNotFoundException;
 import com.example.demo.mapper.CategoryMapper;
 import com.example.demo.repository.CategoryRepository;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +31,7 @@ public class CategoryService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.CATEGORIES, allEntries = true)
     public CategoryResponse create(CategoryCreationRequest request) {
         if (categoryRepository.existsByName(request.getName())) {
             throw new BusinessException("Category with name " + request.getName() + " already exists");
@@ -37,6 +41,7 @@ public class CategoryService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(CacheConfig.CATEGORIES)
     public List<CategoryResponse> getAll() {
         List<Category> categories = categoryRepository.findAll();
 
@@ -49,7 +54,9 @@ public class CategoryService {
         return categoryMapper.toResponse(category);
     }
 
+    // product responses embed the category, so they are refreshed too
     @Transactional
+    @CacheEvict(cacheNames = {CacheConfig.CATEGORIES, CacheConfig.PUBLIC_PRODUCTS}, allEntries = true)
     public CategoryResponse updateById(Long id, CategoryUpdateRequest request) {
         Category category = categoryRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Category", "id", id));
         if (!category.getName().equals(request.getName())) {
@@ -62,6 +69,7 @@ public class CategoryService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = {CacheConfig.CATEGORIES, CacheConfig.PUBLIC_PRODUCTS}, allEntries = true)
     public CategoryResponse deleteById(Long id) {
         Category category = categoryRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Category", "id", id));
         categoryRepository.delete(category);

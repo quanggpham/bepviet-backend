@@ -1,5 +1,6 @@
 package com.example.demo.service;
 
+import com.example.demo.config.CacheConfig;
 import com.example.demo.entity.Category;
 import com.example.demo.entity.Product;
 import com.example.demo.exception.ResourceNotFoundException;
@@ -9,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -31,6 +33,7 @@ public class ExcelImportService {
      * Cấu trúc cột: name | description | price | stockQuantity | imageUrl | categoryName
      */
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.PUBLIC_PRODUCTS, allEntries = true)
     public ExcelImportResult importProducts(MultipartFile file) throws IOException {
         validateFile(file);
 
