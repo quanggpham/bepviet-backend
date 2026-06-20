@@ -83,11 +83,15 @@ public class ProductService {
         return toResponses(List.of(product), userId).get(0);
     }
 
-    /** Only anonymous lists are cached: a signed-in viewer's list carries their own "liked" flags. */
+    /**
+     * Only anonymous lists are cached: a signed-in viewer's list carries their own "liked" flags.
+     * Hidden products are listed only for admins, who need them to show them again.
+     */
     @Cacheable(cacheNames = CacheConfig.PUBLIC_PRODUCTS, condition = "#userId == null",
             key = "T(java.util.Arrays).asList(#request.categoryId, #request.name, #request.minPrice, #request.maxPrice, "
                     + "#pageable.pageNumber, #pageable.pageSize, #pageable.sort.toString())")
-    public PageResponse<ProductResponse> search(ProductSearchRequest request, Pageable pageable, Long userId) {
+    public PageResponse<ProductResponse> search(ProductSearchRequest request, Pageable pageable, Long userId,
+                                                boolean includeHidden) {
         int validatedSize = Math.min(pageable.getPageSize(), 50);
 
         Pageable finalPageable = PageRequest.of(
@@ -97,6 +101,9 @@ public class ProductService {
         );
 
         Specification<Product> spec = Specification.where(null);
+        if (!includeHidden) {
+            spec = spec.and(ProductSpecification.isListed());
+        }
         if (request.getCategoryId() != null) {
             spec = spec.and(ProductSpecification.hasCategory(request.getCategoryId()));
         }

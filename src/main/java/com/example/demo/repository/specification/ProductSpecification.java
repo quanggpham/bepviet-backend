@@ -12,6 +12,11 @@ public class ProductSpecification {
                 : cb.like(cb.lower(root.get("name").as(String.class)), "%" + name.trim().toLowerCase() + "%");
     }
 
+    /** Products hidden by an admin; rows created before the flag existed have NULL and stay listed. */
+    public static Specification<Product> isListed() {
+        return (root, query, cb) -> cb.or(cb.isNull(root.get("isActive")), cb.isTrue(root.get("isActive")));
+    }
+
     public static Specification<Product> hasCategory(Long categoryId) {
         return (root, query, cb) -> (categoryId == null) ? null : cb.equal(root.get("category").get("id"), categoryId);
     }

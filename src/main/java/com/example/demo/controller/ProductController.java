@@ -131,8 +131,14 @@ public class ProductController {
                 .body(ApiResponse.<PageResponse<ProductResponse>>builder()
                         .status(HttpStatus.OK.value())
                         .message("Tim kiem thanh cong")
-                        .data(productService.search(request, pageable, currentUser != null ? currentUser.getId() : null))
+                        .data(productService.search(request, pageable,
+                                currentUser != null ? currentUser.getId() : null, isAdmin(currentUser)))
                         .build());
+    }
+
+    private static boolean isAdmin(UserPrincipal user) {
+        return user != null && user.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
     }
 
     @PostMapping("/import-excel")
