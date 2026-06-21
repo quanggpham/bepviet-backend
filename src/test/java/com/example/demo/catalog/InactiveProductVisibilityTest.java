@@ -13,10 +13,11 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Hidden products stay out of the storefront list, including its cache, but remain manageable by admins. */
+/** Hidden products stay out of the storefront (list, cache, detail, checkout) but remain manageable by admins. */
 class InactiveProductVisibilityTest extends IntegrationTestBase {
 
     @Autowired
@@ -52,6 +53,32 @@ class InactiveProductVisibilityTest extends IntegrationTestBase {
 
         setActive(product, true, admin);
         assertThat(list(product.getName(), null)).contains(product.getName());
+    }
+
+    @Test
+    void hiddenProductDetailIsNotFoundForShoppersButVisibleToAdmins() throws Exception {
+        Product hidden = namedProduct(false);
+
+        mockMvc.perform(get("/api/v1/products/" + hidden.getId()))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/products/" + hidden.getId()).header("Authorization", bearer(createUser(Role.USER))))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/products/" + hidden.getId()).header("Authorization", bearer(createUser(Role.ADMIN))))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void hiddenProductCannotBeCheckedOutAndKeepsItsStock() throws Exception {
+        Product hidden = namedProduct(false);
+
+        mockMvc.perform(post("/api/v1/orders").header("Authorization", bearer(createUser(Role.USER)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName":"Buyer","phoneNumber":"0912345678","shippingAddress":"HN",
+                                 "paymentMethod":"COD","items":[{"productId":%d,"quantity":1}]}
+                                """.formatted(hidden.getId())))
+                .andExpect(status().isBadRequest());
+        assertThat(productRepository.findById(hidden.getId()).orElseThrow().getStockQuantity()).isEqualTo(10);
     }
 
     private void setActive(Product product, boolean active, String admin) throws Exception {

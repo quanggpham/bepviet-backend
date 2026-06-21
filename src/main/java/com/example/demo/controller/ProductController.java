@@ -117,7 +117,8 @@ public class ProductController {
                 .body(ApiResponse.<ProductResponse>builder()
                         .status(HttpStatus.OK.value())
                         .message("Lay thong tin san pham thanh cong")
-                        .data(productService.findById(id, currentUser != null ? currentUser.getId() : null))
+                        .data(productService.findById(id,
+                                currentUser != null ? currentUser.getId() : null, isAdmin(currentUser)))
                         .build());
     }
 

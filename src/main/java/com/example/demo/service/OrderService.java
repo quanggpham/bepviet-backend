@@ -71,6 +71,9 @@ public class OrderService {
         {
             Product product = productRepository.findById(item.getProductId())
                     .orElseThrow(() -> new ResourceNotFoundException("Product", "", item.getProductId()));
+            if (Boolean.FALSE.equals(product.getIsActive())) {
+                throw new BusinessException("Sản phẩm " + product.getName() + " hiện không còn bán");
+            }
 
             quantityByProductId.merge(product.getId(), item.getQuantity(), Integer::sum);
             productsById.put(product.getId(), product);

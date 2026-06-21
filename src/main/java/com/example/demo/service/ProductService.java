@@ -77,8 +77,9 @@ public class ProductService {
         return productMapper.toResponse(product);
     }
 
-    public ProductResponse findById(Long id, Long userId) {
+    public ProductResponse findById(Long id, Long userId, boolean includeHidden) {
         Product product = productRepository.findById(id)
+                .filter(p -> includeHidden || !Boolean.FALSE.equals(p.getIsActive()))
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
         return toResponses(List.of(product), userId).get(0);
     }
