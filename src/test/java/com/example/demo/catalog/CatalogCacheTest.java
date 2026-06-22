@@ -1,5 +1,7 @@
 package com.example.demo.catalog;
 
+import com.example.demo.config.DatabaseSeeder;
+import com.example.demo.entity.Category;
 import com.example.demo.entity.Product;
 import com.example.demo.entity.User;
 import com.example.demo.enums.Role;
@@ -40,6 +42,9 @@ class CatalogCacheTest extends IntegrationTestBase {
     @Autowired
     ObjectProvider<CacheManager> cacheManager;
 
+    @Autowired
+    DatabaseSeeder databaseSeeder;
+
     Statistics statistics;
     String admin;
 
@@ -73,6 +78,18 @@ class CatalogCacheTest extends IntegrationTestBase {
                         .content("{\"name\":\"" + created + "\"}"))
                 .andExpect(status().isCreated());
         assertThat(get200("/api/v1/categories")).contains(created);
+    }
+
+    /** The web server accepts requests before startup seeding finishes; what it cached meanwhile must not stick. */
+    @Test
+    void startupSeedingDoesNotLeaveAStaleCatalogInTheCache() throws Exception {
+        get200("/api/v1/categories");
+        String seeded = "Seed " + UUID.randomUUID().toString().substring(0, 8);
+        categoryRepository.save(Category.builder().name(seeded).build()); // the seeder writes through repositories
+
+        databaseSeeder.run();
+
+        assertThat(get200("/api/v1/categories")).contains(seeded);
     }
 
     @Test
