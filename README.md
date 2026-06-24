@@ -95,6 +95,7 @@ adds an admin account, sample customers, three categories, fifteen products, cou
 The seeded admin uses a well-known password; change it before exposing the instance.
 
 Endpoint reference: [docs/API_DOCUMENTATION.md](docs/API_DOCUMENTATION.md).
+Production deployment steps: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Configuration
 
@@ -115,6 +116,7 @@ Optional variables:
 |---|---|---|
 | `RATE_LIMIT_TRUSTED_PROXIES` | `0` | Number of reverse proxies that append to `X-Forwarded-For`. Set to `1` behind a single proxy (for example Render); with `0` every client behind the proxy shares one rate-limit bucket. |
 | `SEPAY_WEBHOOK_API_KEY` | empty | API key SePay sends with webhooks |
+| `SEPAY_SECRET_KEY` | empty | SePay merchant secret |
 | `SEPAY_BANK_NAME`, `SEPAY_BANK_BIN`, `SEPAY_BANK_ACCOUNT`, `SEPAY_ACCOUNT_NAME` | empty | Bank details shown for transfers |
 | `email`, `password` | empty | SMTP account for outgoing mail |
 | `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_TEST_RECIPIENT` | empty | Resend e-mail provider |
