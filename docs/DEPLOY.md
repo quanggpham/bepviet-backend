@@ -81,7 +81,11 @@ Optional, depending on the features used:
 ## 2. Deploying
 
 - [ ] Note the commit currently live on Render (Events tab) so you know what to roll back to.
-- [ ] Health check path: `/api/v1/categories` (public, cheap, cached).
+- [ ] Health check path: `/api/v1/health` (public, no database access).
+- [ ] Optional: an uptime monitor (for example UptimeRobot, every 5 minutes) on `/api/v1/health` keeps
+      the free instance from sleeping after 15 idle minutes. Do not ping endpoints that query the
+      database, or Neon's compute never suspends and the free compute quota runs out. One always-on
+      free service uses most of Render's 750 free instance hours per month.
 - [ ] Push to the branch Render deploys from, or trigger a manual deploy.
 - [ ] Watch the deploy log until `Started EcomApplication` appears.
 

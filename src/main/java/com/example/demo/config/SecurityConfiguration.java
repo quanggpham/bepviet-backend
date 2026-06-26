@@ -39,6 +39,7 @@ public class SecurityConfiguration {
 
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/v1/auth/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/payments/stripe/webhook").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/payments/sepay/webhook").permitAll()
                         .requestMatchers("/api/v1/ai/**").permitAll()
